@@ -1,0 +1,56 @@
+[
+  {
+    "arguments": [
+      "/usr/bin/g++",
+      "-std=c++20",
+      "-Wall",
+      "-Wextra",
+      "-O2",
+      "-g",
+      "-I/usr/include",
+      "-c",
+      "-o",
+      "build/main.o",
+      "src/main.cpp"
+    ],
+    "directory": "/mnt/c/Users/poops/OneDrive/Desktop/SingleFlight",
+    "file": "/mnt/c/Users/poops/OneDrive/Desktop/SingleFlight/src/main.cpp",
+    "output": "/mnt/c/Users/poops/OneDrive/Desktop/SingleFlight/build/main.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/g++",
+      "-std=c++20",
+      "-Wall",
+      "-Wextra",
+      "-O2",
+      "-g",
+      "-I/usr/include",
+      "-c",
+      "-o",
+      "build/ProxyServer/ProxyServer.o",
+      "src/ProxyServer/ProxyServer.cpp"
+    ],
+    "directory": "/mnt/c/Users/poops/OneDrive/Desktop/SingleFlight",
+    "file": "/mnt/c/Users/poops/OneDrive/Desktop/SingleFlight/src/ProxyServer/ProxyServer.cpp",
+    "output": "/mnt/c/Users/poops/OneDrive/Desktop/SingleFlight/build/ProxyServer/ProxyServer.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/g++",
+      "-std=c++20",
+      "-Wall",
+      "-Wextra",
+      "-O2",
+      "-g",
+      "-I/usr/include",
+      "-c",
+      "-o",
+      "build/Session/Session.o",
+      "src/Session/Session.cpp"
+    ],
+    "directory": "/mnt/c/Users/poops/OneDrive/Desktop/SingleFlight",
+    "file": "/mnt/c/Users/poops/OneDrive/Desktop/SingleFlight/src/Session/Session.cpp",
+    "output": "/mnt/c/Users/poops/OneDrive/Desktop/SingleFlight/build/Session/Session.o"
+  }
+]

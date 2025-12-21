@@ -1,0 +1,34 @@
+# Build directories
+build/
+bin/
+
+# Compiled files
+*.o
+*.obj
+*.exe
+*.out
+*.a
+*.lib
+*.dll
+*.so
+*.dylib
+
+# IDE files (manter .vscode/ mas ignorar alguns arquivos específicos)
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# CMake (se usar no futuro)
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile.cmake
+
+# Logs
+*.log
+
+# Clangd cache
+.clangd/
+
