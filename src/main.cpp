@@ -7,7 +7,7 @@ using boost::asio::ip::tcp;
 int main() {
     try {
         spdlog::set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%^%l%$] %v");
-        spdlog::set_level(spdlog::level::info);
+        spdlog::set_level(spdlog::level::debug);
 
         unsigned short local_port = 6000;
         std::string db_host = "127.0.0.1";

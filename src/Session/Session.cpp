@@ -5,14 +5,37 @@
 #include <openssl/x509.h>
 #include <openssl/pem.h>
 #include <openssl/rsa.h>
+#include <string>
+
+static bool is_expected_ssl_error(const boost::system::error_code& ec) {
+    if (ec == boost::asio::error::operation_aborted) {
+        return true;
+    }
+    
+    if (ec.category() == boost::asio::error::get_ssl_category()) {
+        std::string msg = ec.message();
+        if (msg.find("stream truncated") != std::string::npos ||
+            msg.find("short read") != std::string::npos ||
+            msg.find("protocol is shutdown") != std::string::npos ||
+            msg.find("bad record mac") != std::string::npos) {
+            return true;
+        }
+    }
+    
+    return false;
+}
 
 Session::Session(tcp::socket client_socket, boost::asio::io_context& io_context)
-    : io_context_(io_context),
-      client_socket_(std::move(client_socket)), 
-      server_socket_(io_context),
-      client_ssl_context_(boost::asio::ssl::context::tlsv12_client),
+    : client_ssl_context_(boost::asio::ssl::context::tlsv12_client),
       server_ssl_context_(boost::asio::ssl::context::tlsv12_server),
-      ssl_enabled_(false) {
+      io_context_(io_context),
+      client_socket_(std::move(client_socket)),
+      server_socket_(io_context),
+      ssl_enabled_(false),
+      is_destroying_(false),
+      client_closed_(false),
+      server_closed_(false) {
+
     client_ssl_context_.set_default_verify_paths();
     client_ssl_context_.set_verify_mode(boost::asio::ssl::verify_none);
     client_ssl_context_.set_options(
@@ -20,8 +43,184 @@ Session::Session(tcp::socket client_socket, boost::asio::io_context& io_context)
         boost::asio::ssl::context::no_sslv2 |
         boost::asio::ssl::context::no_sslv3 |
         boost::asio::ssl::context::single_dh_use);
-    
+
+    client_buffer_.resize(8192);
+    server_buffer_.resize(8192);
+    startup_packet_.resize(8192);
+
     setup_server_ssl_context();
+}
+
+Session::~Session() {
+    is_destroying_.store(true);
+    
+    boost::system::error_code ec;
+    
+    if (client_ssl_socket_) {
+        try {
+            auto& lowest = client_ssl_socket_->lowest_layer();
+            if (lowest.is_open()) {
+                lowest.cancel(ec);
+            }
+        } catch (...) {
+        }
+    }
+    
+    if (server_ssl_socket_) {
+        try {
+            auto& lowest = server_ssl_socket_->lowest_layer();
+            if (lowest.is_open()) {
+                lowest.cancel(ec);
+            }
+        } catch (...) {
+        }
+    }
+    
+    if (client_socket_ && client_socket_->is_open()) {
+        try {
+            client_socket_->cancel(ec);
+        } catch (...) {
+        }
+    }
+    
+    if (server_socket_ && server_socket_->is_open()) {
+        try {
+            server_socket_->cancel(ec);
+        } catch (...) {
+        }
+    }
+    
+    if (client_ssl_socket_) {
+        try {
+            auto& lowest = client_ssl_socket_->lowest_layer();
+            if (lowest.is_open()) {
+                boost::system::error_code shutdown_ec;
+                client_ssl_socket_->shutdown(shutdown_ec);
+            }
+        } catch (...) {
+        }
+    }
+    
+    if (server_ssl_socket_) {
+        try {
+            auto& lowest = server_ssl_socket_->lowest_layer();
+            if (lowest.is_open()) {
+                boost::system::error_code shutdown_ec;
+                server_ssl_socket_->shutdown(shutdown_ec);
+            }
+        } catch (...) {
+        }
+    }
+    
+    if (client_ssl_socket_) {
+        try {
+            auto& lowest = client_ssl_socket_->lowest_layer();
+            if (lowest.is_open()) {
+                lowest.close(ec);
+            }
+        } catch (...) {
+        }
+    }
+    
+    if (server_ssl_socket_) {
+        try {
+            auto& lowest = server_ssl_socket_->lowest_layer();
+            if (lowest.is_open()) {
+                lowest.close(ec);
+            }
+        } catch (...) {
+        }
+    }
+    
+    if (client_socket_ && client_socket_->is_open()) {
+        try {
+            client_socket_->close(ec);
+        } catch (...) {
+        }
+    }
+    
+    if (server_socket_ && server_socket_->is_open()) {
+        try {
+            server_socket_->close(ec);
+        } catch (...) {
+        }
+    }
+    
+    client_ssl_socket_.reset();
+    server_ssl_socket_.reset();
+    
+    spdlog::info("[Session] Destroyed");
+}
+
+void Session::close() {
+    bool expected = false;
+    if (!is_destroying_.compare_exchange_strong(expected, true)) {
+        spdlog::debug("[Session] close() called but already closing/destroying");
+        return;
+    }
+    
+    spdlog::info("[Session] Closing session...");
+    boost::system::error_code ec;
+    
+    if (client_ssl_socket_) {
+        try {
+            auto& lowest = client_ssl_socket_->lowest_layer();
+            if (lowest.is_open()) {
+                lowest.cancel(ec);
+            }
+        } catch (...) {}
+    }
+    
+    if (server_ssl_socket_) {
+        try {
+            auto& lowest = server_ssl_socket_->lowest_layer();
+            if (lowest.is_open()) {
+                lowest.cancel(ec);
+            }
+        } catch (...) {}
+    }
+    
+    if (client_socket_ && client_socket_->is_open()) {
+        try {
+            client_socket_->cancel(ec);
+        } catch (...) {}
+    }
+    
+    if (server_socket_ && server_socket_->is_open()) {
+        try {
+            server_socket_->cancel(ec);
+        } catch (...) {}
+    }
+    
+    if (client_ssl_socket_) {
+        try {
+            auto& lowest = client_ssl_socket_->lowest_layer();
+            if (lowest.is_open()) {
+                lowest.close(ec);
+            }
+        } catch (...) {}
+    }
+    
+    if (server_ssl_socket_) {
+        try {
+            auto& lowest = server_ssl_socket_->lowest_layer();
+            if (lowest.is_open()) {
+                lowest.close(ec);
+            }
+        } catch (...) {}
+    }
+    
+    if (client_socket_ && client_socket_->is_open()) {
+        try {
+            client_socket_->close(ec);
+        } catch (...) {}
+    }
+    
+    if (server_socket_ && server_socket_->is_open()) {
+        try {
+            server_socket_->close(ec);
+        } catch (...) {}
+    }
 }
 
 void Session::setup_server_ssl_context() {
@@ -40,7 +239,9 @@ void Session::setup_server_ssl_context() {
     BIGNUM* bn = BN_new();
     BN_set_word(bn, RSA_F4);
     RSA_generate_key_ex(rsa, 2048, bn, nullptr);
-    EVP_PKEY_assign_RSA(pkey, rsa);
+    EVP_PKEY_set1_RSA(pkey, rsa);
+    RSA_free(rsa);
+    BN_free(bn);
     
     X509* x509 = X509_new();
     X509_set_version(x509, 2);
@@ -55,41 +256,76 @@ void Session::setup_server_ssl_context() {
     
     X509_sign(x509, pkey, EVP_sha256());
     
-    SSL_CTX_use_certificate(ctx, x509);
-    SSL_CTX_use_PrivateKey(ctx, pkey);
+    int cert_result = SSL_CTX_use_certificate(ctx, x509);
+    int key_result = SSL_CTX_use_PrivateKey(ctx, pkey);
+    
+    if (cert_result != 1 || key_result != 1) {
+        spdlog::error("[Session] Failed to set certificate or private key!");
+        X509_free(x509);
+        EVP_PKEY_free(pkey);
+        return;
+    }
     
     if (!SSL_CTX_check_private_key(ctx)) {
         spdlog::error("[Session] Private key does not match certificate!");
+        X509_free(x509);
+        EVP_PKEY_free(pkey);
+        return;
     }
     
     X509_free(x509);
     EVP_PKEY_free(pkey);
-    BN_free(bn);
 }
 
 void Session::start(const std::string& db_host, short db_port) {
+    if (is_destroying_.load()) {
+        return;
+    }
+    
     auto self = shared_from_this();
     
-    tcp::resolver resolver(client_socket_.get_executor());
+    if (!client_socket_) {
+        spdlog::error("[Session] Client socket not available");
+        return;
+    }
+    
+    tcp::resolver resolver(client_socket_->get_executor());
     auto endpoints = resolver.resolve(db_host, std::to_string(db_port));
 
-    boost::asio::async_connect(server_socket_, endpoints,
+    boost::asio::async_connect(*server_socket_, endpoints,
         [this, self](boost::system::error_code ec, tcp::endpoint) {
+            if (is_destroying_.load()) {
+                return;
+            }
             if (!ec) {
                 spdlog::info("[Session] Connected to PostgreSQL. Waiting for SSLRequest...");
                 read_client_startup();
             } else {
                 spdlog::error("[Session] Failed to connect to PostgreSQL: {}", ec.message());
+                close();
             }
         });
 }
 
 void Session::read_client_startup() {
+    if (is_destroying_.load()) {
+        return;
+    }
+    
     auto self = shared_from_this();
+    
+    if (!client_socket_) {
+        spdlog::error("[Session] Client socket not available in read_client_startup");
+        return;
+    }
+    
     client_buffer_.resize(8192); 
     
-    client_socket_.async_read_some(boost::asio::buffer(client_buffer_),
+    client_socket_->async_read_some(boost::asio::buffer(client_buffer_),
         [this, self](boost::system::error_code ec, std::size_t length) {
+            if (is_destroying_.load()) {
+                return;
+            }
             if (!ec) {
                 if (length == 8 &&
                     static_cast<unsigned char>(client_buffer_[4]) == 0x04 &&
@@ -101,57 +337,100 @@ void Session::read_client_startup() {
                     relay_to_server(length);
                 }
             } else {
-                if (ec != boost::asio::error::eof) {
+                if (!is_expected_ssl_error(ec)) {
                     spdlog::warn("[Session] Read error: {}", ec.message());
+                    close();
                 }
             }
-            }
-        );
+        });
 }
 
 void Session::read_client_startup_after_ssl() {
+    if (is_destroying_.load()) {
+        return;
+    }
+    
     auto self = shared_from_this();
+    
+    if (!client_ssl_socket_) {
+        spdlog::error("[Session] Client SSL socket not available");
+        return;
+    }
+    
+    spdlog::debug("[Session] Waiting for startup packet from client after SSL handshake...");
     client_buffer_.resize(8192);
     
     client_ssl_socket_->async_read_some(boost::asio::buffer(client_buffer_),
         [this, self](boost::system::error_code ec, std::size_t length) {
+            if (is_destroying_.load()) {
+                return;
+            }
             if (!ec) {
+                spdlog::debug("[Session] Received {} bytes from client after SSL handshake", length);
+                if (!server_ssl_socket_) {
+                    spdlog::error("[Session] Server SSL socket not available");
+                    return;
+                }
+                
                 boost::asio::async_write(*server_ssl_socket_,
                     boost::asio::buffer(client_buffer_, length),
                     [this, self](boost::system::error_code ec, std::size_t) {
+                        if (is_destroying_.load()) {
+                            return;
+                        }
                         if (!ec) {
-                            spdlog::debug("[Session] Startup packet sent via SSL. Starting bridge mode.");
-                            bridge_client_to_server();
+                            spdlog::info("[Session] Startup packet sent via SSL. Starting bridge mode.");
                             bridge_server_to_client();
+                            bridge_client_to_server();
                         } else {
                             spdlog::error("[Session] Failed to send startup packet via SSL: {}", ec.message());
+                            close();
                         }
                     });
             } else {
-                spdlog::error("[Session] Failed to read startup packet from client: {}", ec.message());
+                if (!is_expected_ssl_error(ec)) {
+                    spdlog::error("[Session] Failed to read startup packet from client: {} (code: {})", ec.message(), ec.value());
+                    close();
+                } else {
+                    spdlog::debug("[Session] Expected SSL error while reading startup packet: {}", ec.message());
+                }
             }
         });
 }
 
 void Session::check_server_ssl_support() {
+    if (is_destroying_.load()) {
+        return;
+    }
+    
     auto self = shared_from_this();
     
-    std::vector<char> ssl_request(8);
-    ssl_request[0] = 0x00;
-    ssl_request[1] = 0x00;
-    ssl_request[2] = 0x00;
-    ssl_request[3] = 0x08;
-    ssl_request[4] = 0x04;
-    ssl_request[5] = 0xd2;
-    ssl_request[6] = 0x16;
-    ssl_request[7] = 0x2f;
+    if (!server_socket_) {
+        spdlog::error("[Session] Server socket not available");
+        return;
+    }
     
-    boost::asio::async_write(server_socket_, boost::asio::buffer(ssl_request),
-        [this, self](boost::system::error_code ec, std::size_t) {
+    std::vector<unsigned char> ssl_request_data = {
+        0x00, 0x00, 0x00, 0x08, 
+        static_cast<unsigned char>(0x04), 
+        static_cast<unsigned char>(0xd2), 
+        static_cast<unsigned char>(0x16), 
+        static_cast<unsigned char>(0x2f)
+    };
+    auto ssl_request = std::make_shared<std::vector<unsigned char>>(std::move(ssl_request_data));
+    
+    boost::asio::async_write(*server_socket_, boost::asio::buffer(*ssl_request),
+        [this, self, ssl_request](boost::system::error_code ec, std::size_t) {
+            if (is_destroying_.load()) {
+                return;
+            }
             if (!ec) {
                 auto buffer = std::make_shared<std::vector<char>>(1);
-                boost::asio::async_read(server_socket_, boost::asio::buffer(*buffer),
+                boost::asio::async_read(*server_socket_, boost::asio::buffer(*buffer),
                     [this, self, buffer](boost::system::error_code ec, std::size_t) {
+                        if (is_destroying_.load()) {
+                            return;
+                        }
                         if (!ec) {
                             if ((*buffer)[0] == 'S') {
                                 spdlog::info("[Session] Server supports SSL. Performing SSL handshake...");
@@ -161,148 +440,319 @@ void Session::check_server_ssl_support() {
                                 handle_ssl_request();
                             }
                         } else {
-                            spdlog::error("[Session] Failed to read server SSL response: {}", ec.message());
+                            if (!is_expected_ssl_error(ec)) {
+                                spdlog::error("[Session] Failed to read server SSL response: {}", ec.message());
+                                close();
+                            }
                         }
                     });
             } else {
-                spdlog::error("[Session] Failed to send SSL request to server: {}", ec.message());
+                if (!is_expected_ssl_error(ec)) {
+                    spdlog::error("[Session] Failed to send SSL request to server: {}", ec.message());
+                    close();
+                }
             }
         });
 }
 
 void Session::handle_ssl_request() {
+    if (is_destroying_.load()) {
+        return;
+    }
+    
     auto self = shared_from_this();
-    boost::asio::async_write(client_socket_, boost::asio::buffer("N", 1),
+    
+    if (!client_socket_) {
+        spdlog::error("[Session] Client socket not available");
+        return;
+    }
+    
+    boost::asio::async_write(*client_socket_, boost::asio::buffer("N", 1),
         [this, self](boost::system::error_code ec, std::size_t) {
+            if (is_destroying_.load()) {
+                return;
+            }
             if (!ec) {
                 relay_to_server(startup_packet_.size());
             } else {
-                spdlog::error("[Session] Failed to send SSL response to client: {}", ec.message());
+                if (!is_expected_ssl_error(ec)) {
+                    spdlog::error("[Session] Failed to send SSL response to client: {}", ec.message());
+                    close();
+                }
             }
         });
 }
 
 void Session::perform_ssl_handshake() {
+    if (is_destroying_.load()) {
+        return;
+    }
+    
     auto self = shared_from_this();
     
-    client_ssl_socket_ = std::make_unique<ssl_socket>(std::move(client_socket_), server_ssl_context_);
-    server_ssl_socket_ = std::make_unique<ssl_socket>(std::move(server_socket_), client_ssl_context_);
+    if (!client_socket_ || !server_socket_) {
+        spdlog::error("[Session] Sockets not available for SSL handshake");
+        close();
+        return;
+    }
     
-    client_ssl_socket_->set_verify_mode(boost::asio::ssl::verify_none);
-    server_ssl_socket_->set_verify_mode(boost::asio::ssl::verify_none);
-    
-    boost::asio::async_write(client_ssl_socket_->next_layer(), boost::asio::buffer("S", 1),
+    boost::asio::async_write(*client_socket_, boost::asio::buffer("S", 1),
         [this, self](boost::system::error_code ec, std::size_t) {
-            if (!ec) {
-                client_ssl_socket_->async_handshake(boost::asio::ssl::stream_base::server,
-                    [this, self](boost::system::error_code ec) {
-                        if (!ec) {
-                            spdlog::info("[Session] SSL handshake with client completed.");
-                            
-                            server_ssl_socket_->async_handshake(boost::asio::ssl::stream_base::client,
-                                [this, self](boost::system::error_code ec) {
-                                    if (!ec) {
-                                        spdlog::info("[Session] SSL handshake with server completed.");
-                                        ssl_enabled_ = true;
-                                        read_client_startup_after_ssl();
-                                    } else {
-                                        spdlog::error("[Session] SSL handshake with server failed: {}", ec.message());
-                                    }
-                                });
-                        } else {
-                            spdlog::error("[Session] SSL handshake with client failed: {}", ec.message());
-                        }
-                    });
-            } else {
-                spdlog::error("[Session] Failed to send SSL response to client: {}", ec.message());
+            if (is_destroying_.load()) {
+                return;
             }
+            if (ec) {
+                if (!is_expected_ssl_error(ec)) {
+                    spdlog::error("[Session] Failed to send SSL response: {}", ec.message());
+                    close();
+                }
+                return;
+            }
+
+            try {
+                client_ssl_socket_ = std::make_unique<ssl_socket>(std::move(*client_socket_), server_ssl_context_);
+                server_ssl_socket_ = std::make_unique<ssl_socket>(std::move(*server_socket_), client_ssl_context_);
+                
+                client_socket_.reset();
+                server_socket_.reset();
+
+                client_ssl_socket_->set_verify_mode(boost::asio::ssl::verify_none);
+                server_ssl_socket_->set_verify_mode(boost::asio::ssl::verify_none);
+            } catch (const std::exception& e) {
+                spdlog::error("[Session] Failed to create SSL streams: {}", e.what());
+                close();
+                return;
+            }
+
+            spdlog::debug("[Session] Starting SSL handshake with client (server mode)...");
+            client_ssl_socket_->async_handshake(boost::asio::ssl::stream_base::server,
+                [this, self](boost::system::error_code ec) {
+                    if (is_destroying_.load()) {
+                        return;
+                    }
+                    if (ec) {
+                        if (!is_expected_ssl_error(ec)) {
+                            spdlog::error("[Session] Client handshake failed: {}", ec.message());
+                            close();
+                        }
+                        return;
+                    }
+
+                    spdlog::debug("[Session] Client SSL handshake completed. Starting server handshake...");
+                    if (!server_ssl_socket_) {
+                        spdlog::error("[Session] Server SSL socket not available");
+                        close();
+                        return;
+                    }
+
+                    server_ssl_socket_->async_handshake(boost::asio::ssl::stream_base::client,
+                        [this, self](boost::system::error_code ec) {
+                            if (is_destroying_.load()) {
+                                return;
+                            }
+                            if (!ec) {
+                                ssl_enabled_ = true;
+                                spdlog::info("[Session] Both SSL handshakes completed. Waiting for client startup packet...");
+                                read_client_startup_after_ssl();
+                            } else {
+                                if (!is_expected_ssl_error(ec)) {
+                                    spdlog::error("[Session] Server handshake failed: {}", ec.message());
+                                    close();
+                                }
+                            }
+                        });
+                });
         });
 }
 
 void Session::relay_to_server(std::size_t length) {
+    if (is_destroying_.load()) {
+        return;
+    }
+    
     auto self = shared_from_this();
-    boost::asio::async_write(server_socket_, boost::asio::buffer(client_buffer_, length),
+    
+    if (!server_socket_) {
+        spdlog::error("[Session] Server socket not available");
+        return;
+    }
+    
+    boost::asio::async_write(*server_socket_, boost::asio::buffer(client_buffer_, length),
         [this, self](boost::system::error_code ec, std::size_t) {
+            if (is_destroying_.load()) {
+                return;
+            }
             if (!ec) {
                 spdlog::debug("[Session] Initial packet relayed to server. Starting bridge mode.");
                 bridge_client_to_server();
                 bridge_server_to_client();
             } else {
-                spdlog::error("[Session] Failed to relay packet to server: {}", ec.message());
+                if (!is_expected_ssl_error(ec)) {
+                    spdlog::error("[Session] Failed to relay packet to server: {}", ec.message());
+                    close();
+                }
             }
         });
 }
 
 void Session::bridge_client_to_server() {
+    if (is_destroying_.load()) {
+        return;
+    }
+    
     auto self = shared_from_this();
     
     auto read_handler = [this, self](boost::system::error_code ec, std::size_t length) {
+        if (is_destroying_.load()) {
+            return;
+        }
         if (!ec) {
+            spdlog::debug("[Session] Received {} bytes from client, forwarding to server", length);
             if (is_sql_query(client_buffer_, length)) {
                 std::string sql_query = std::string(client_buffer_.begin(), client_buffer_.begin() + length);
                 spdlog::info("[Session] SQL query: {}", sql_query);
             }
             
-            auto write_handler = [this, self](boost::system::error_code ec, std::size_t) {
+            auto write_handler = [this, self, length](boost::system::error_code ec, std::size_t) {
+                if (is_destroying_.load()) {
+                    spdlog::debug("[Session] Write handler (client->server): session is destroying, ignoring");
+                    return;
+                }
                 if (!ec) {
+                    spdlog::debug("[Session] Successfully forwarded {} bytes to server, continuing bridge", length);
                     bridge_client_to_server();
                 } else {
-                    spdlog::warn("[Session] Failed to write to server: {}", ec.message());
+                    if (!is_expected_ssl_error(ec)) {
+                        spdlog::warn("[Session] Failed to write to server: {} (code: {})", ec.message(), ec.value());
+                        close();
+                    } else {
+                        spdlog::debug("[Session] Expected SSL error while writing to server: {}", ec.message());
+                    }
                 }
             };
             
+            if (server_closed_.load()) {
+                spdlog::debug("[Session] Server closed, cannot forward client data");
+                return;
+            }
+            
             if (ssl_enabled_ && server_ssl_socket_) {
                 boost::asio::async_write(*server_ssl_socket_, boost::asio::buffer(client_buffer_, length), write_handler);
+            } else if (server_socket_) {
+                boost::asio::async_write(*server_socket_, boost::asio::buffer(client_buffer_, length), write_handler);
             } else {
-                boost::asio::async_write(server_socket_, boost::asio::buffer(client_buffer_, length), write_handler);
+                spdlog::warn("[Session] No server socket available for writing");
+                close();
             }
         } else {
-            if (ec != boost::asio::error::eof) {
-                spdlog::warn("[Session] Client read error: {}", ec.message());
+            if (ec == boost::asio::error::eof) {
+                spdlog::info("[Session] Client closed connection (EOF)");
+                client_closed_.store(true);
+                if (server_closed_.load()) {
+                    close();
+                }
+            } else if (!is_expected_ssl_error(ec)) {
+                spdlog::warn("[Session] Client read error: {} (code: {})", ec.message(), ec.value());
+                close();
+            } else {
+                spdlog::debug("[Session] Client expected SSL error: {} (code: {})", ec.message(), ec.value());
             }
         }
     };
     
     if (ssl_enabled_ && client_ssl_socket_) {
+        spdlog::debug("[Session] Waiting for data from client (SSL)...");
         client_ssl_socket_->async_read_some(boost::asio::buffer(client_buffer_), read_handler);
+    } else if (client_socket_) {
+        spdlog::debug("[Session] Waiting for data from client (plain)...");
+        client_socket_->async_read_some(boost::asio::buffer(client_buffer_), read_handler);
     } else {
-        client_socket_.async_read_some(boost::asio::buffer(client_buffer_), read_handler);
+        spdlog::warn("[Session] No client socket available for reading");
+        close();
     }
 }
 
 void Session::bridge_server_to_client() {
+    if (is_destroying_.load()) {
+        return;
+    }
+    
     auto self = shared_from_this();
     
     auto read_handler = [this, self](boost::system::error_code ec, std::size_t length) {
+        if (is_destroying_.load()) {
+            return;
+        }
         if (!ec) {
-            auto write_handler = [this, self](boost::system::error_code ec, std::size_t) {
+            spdlog::debug("[Session] Received {} bytes from server, forwarding to client", length);
+            auto write_handler = [this, self, length](boost::system::error_code ec, std::size_t) {
+                if (is_destroying_.load()) {
+                    spdlog::debug("[Session] Write handler: session is destroying, ignoring");
+                    return;
+                }
                 if (!ec) {
+                    spdlog::debug("[Session] Successfully forwarded {} bytes to client, continuing bridge", length);
                     bridge_server_to_client();
                 } else {
-                    spdlog::warn("[Session] Failed to write to client: {}", ec.message());
+                    if (!is_expected_ssl_error(ec)) {
+                        spdlog::warn("[Session] Failed to write to client: {} (code: {})", ec.message(), ec.value());
+                        close();
+                    } else {
+                        spdlog::debug("[Session] Expected SSL error while writing to client: {}", ec.message());
+                    }
                 }
             };
             
+            if (client_closed_.load()) {
+                spdlog::debug("[Session] Client closed, cannot forward server data");
+                return;
+            }
+            
             if (ssl_enabled_ && client_ssl_socket_) {
-                boost::asio::async_write(*client_ssl_socket_, boost::asio::buffer(server_buffer_, length), write_handler);
+                boost::asio::async_write(*client_ssl_socket_, 
+                    boost::asio::buffer(server_buffer_.data(), length), 
+                    write_handler);
+            } else if (client_socket_) {
+                boost::asio::async_write(*client_socket_, 
+                    boost::asio::buffer(server_buffer_.data(), length), 
+                    write_handler);
             } else {
-                boost::asio::async_write(client_socket_, boost::asio::buffer(server_buffer_, length), write_handler);
+                spdlog::warn("[Session] No client socket available for writing");
+                close();
             }
         } else {
-            if (ec != boost::asio::error::eof) {
-                spdlog::warn("[Session] Server read error: {}", ec.message());
+            if (ec == boost::asio::error::eof) {
+                spdlog::info("[Session] Server closed connection (EOF)");
+                server_closed_.store(true);
+                if (client_closed_.load()) {
+                    close();
+                }
+            } else if (!is_expected_ssl_error(ec)) {
+                spdlog::warn("[Session] Server read error: {} (code: {})", ec.message(), ec.value());
+                close();
+            } else {
+                spdlog::debug("[Session] Server expected SSL error: {} (code: {})", ec.message(), ec.value());
             }
         }
     };
     
+    if (server_closed_.load()) {
+        spdlog::debug("[Session] Server already closed, skipping read");
+        return;
+    }
+    
     if (ssl_enabled_ && server_ssl_socket_) {
+        spdlog::debug("[Session] Waiting for data from server (SSL)...");
         server_ssl_socket_->async_read_some(boost::asio::buffer(server_buffer_), read_handler);
+    } else if (server_socket_) {
+        spdlog::debug("[Session] Waiting for data from server (plain)...");
+        server_socket_->async_read_some(boost::asio::buffer(server_buffer_), read_handler);
     } else {
-        server_socket_.async_read_some(boost::asio::buffer(server_buffer_), read_handler);
+        spdlog::warn("[Session] No server socket available for reading");
+        close();
     }
 }
 
-
-bool Session::is_sql_query(std::vector<char> buffer, std::size_t length) {
-    return length > 0 && buffer[0] == 'Q';
+bool Session::is_sql_query(std::vector<char>& buffer, std::size_t length) {
+    return length > 0 && static_cast<unsigned char>(buffer[0]) == 'Q';
 }
