@@ -13,7 +13,7 @@ PostgreSQL proxy server that implements the SingleFlight pattern, avoiding dupli
 
 ```bash
 sudo apt-get update
-sudo apt-get install build-essential libboost-all-dev libspdlog-dev
+sudo apt-get install build-essential libboost-all-dev libspdlog-dev libssl-dev
 ```
 
 **Note:** If Boost is in another location, set the variable:

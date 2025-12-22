@@ -6,6 +6,7 @@
         "${workspaceFolder}/src/Session"
     ],
     "C_Cpp.default.cppStandard": "c++20",
+    "clangd.path": "/usr/bin/clangd",
     "clangd.arguments": [
         "--compile-commands-dir=${workspaceFolder}",
         "--query-driver=/usr/bin/g++",
@@ -13,9 +14,9 @@
         "--background-index=true",
         "--clang-tidy=false",
         "--completion-style=detailed",
-        "--log=error",
-        "--diagnostic-style=none"
+        "--log=error"
     ],
+    "C_Cpp.default.compileCommands": "${workspaceFolder}/compile_commands.json",
     "clangd.fallbackFlags": [
         "-std=c++20"
     ],

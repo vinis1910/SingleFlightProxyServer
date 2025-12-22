@@ -1,6 +1,6 @@
 CXX = g++
-CXXFLAGS = -std=c++20 -Wall -Wextra -O2 -g
-LDFLAGS = -pthread
+CXXFLAGS = -std=c++20 -Wall -Wextra -O2 -g -Wno-array-bounds
+LDFLAGS = -pthread -lssl -lcrypto
 
 SRC_DIR = src
 BUILD_DIR = build
@@ -28,11 +28,11 @@ ifeq ($(UNAME_S),Windows)
     endif
     TARGET := $(TARGET).exe
 else ifeq ($(UNAME_S),Linux)
-    CXXFLAGS += $(shell pkg-config --cflags boost spdlog fmt 2>/dev/null || echo "-I/usr/include")
-    LDFLAGS += $(shell pkg-config --libs boost spdlog fmt 2>/dev/null || echo "-lspdlog -lfmt -lboost_system")
+    CXXFLAGS += $(shell pkg-config --cflags boost spdlog fmt openssl 2>/dev/null || echo "-I/usr/include")
+    LDFLAGS += $(shell pkg-config --libs boost spdlog fmt openssl 2>/dev/null || echo "-lspdlog -lfmt -lboost_system -lssl -lcrypto")
 else ifeq ($(UNAME_S),Darwin)
     CXXFLAGS += -I/usr/local/include -I/opt/homebrew/include
-    LDFLAGS += -L/usr/local/lib -L/opt/homebrew/lib
+    LDFLAGS += -L/usr/local/lib -L/opt/homebrew/lib -lssl -lcrypto
 endif
 
 all: $(TARGET)
