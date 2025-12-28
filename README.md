@@ -7,7 +7,7 @@ PostgreSQL proxy server that implements the SingleFlight pattern, avoiding dupli
 - **Compiler**: GCC/G++ with C++20 support or higher (GCC 10+ recommended)
 - **Boost.Asio**: Boost library
 - **spdlog**: Fast C++ logging library (header-only)
-- **System**: WSL (recommended), Windows (MinGW/MSYS2), Linux or macOS
+- **System**: Linux, Windows (WSL/MinGW/MSYS2),  or macOS
 
 ### Installation on Linux (Ubuntu/Debian)
 

@@ -8,7 +8,9 @@ BIN_DIR = bin
 
 SOURCES = $(SRC_DIR)/main.cpp \
           $(SRC_DIR)/ProxyServer/ProxyServer.cpp \
-          $(SRC_DIR)/Session/Session.cpp
+          $(SRC_DIR)/Session/Session.cpp \
+          $(SRC_DIR)/QueryCache/QueryCache.cpp \
+          $(SRC_DIR)/SingleFlight/SingleFlight.cpp
 
 OBJECTS = $(SOURCES:$(SRC_DIR)/%.cpp=$(BUILD_DIR)/%.o)
 TARGET = $(BIN_DIR)/singleflight-proxy
@@ -28,8 +30,14 @@ ifeq ($(UNAME_S),Windows)
     endif
     TARGET := $(TARGET).exe
 else ifeq ($(UNAME_S),Linux)
-    CXXFLAGS += $(shell pkg-config --cflags boost spdlog fmt openssl 2>/dev/null || echo "-I/usr/include")
-    LDFLAGS += $(shell pkg-config --libs boost spdlog fmt openssl 2>/dev/null || echo "-lspdlog -lfmt -lboost_system -lssl -lcrypto")
+    HIREDIS_AVAILABLE := $(shell pkg-config --exists hiredis 2>/dev/null && echo "yes" || echo "no")
+    ifeq ($(HIREDIS_AVAILABLE),yes)
+        CXXFLAGS += -DHAVE_HIREDIS $(shell pkg-config --cflags boost spdlog fmt openssl hiredis 2>/dev/null || echo "-I/usr/include")
+        LDFLAGS += $(shell pkg-config --libs boost spdlog fmt openssl hiredis 2>/dev/null || echo "-lspdlog -lfmt -lboost_system -lssl -lcrypto -lhiredis")
+    else
+        CXXFLAGS += $(shell pkg-config --cflags boost spdlog fmt openssl 2>/dev/null || echo "-I/usr/include")
+        LDFLAGS += $(shell pkg-config --libs boost spdlog fmt openssl 2>/dev/null || echo "-lspdlog -lfmt -lboost_system -lssl -lcrypto")
+    endif
 else ifeq ($(UNAME_S),Darwin)
     CXXFLAGS += -I/usr/local/include -I/opt/homebrew/include
     LDFLAGS += -L/usr/local/lib -L/opt/homebrew/lib -lssl -lcrypto
@@ -38,31 +46,33 @@ endif
 all: $(TARGET)
 
 $(TARGET): $(OBJECTS) | $(BIN_DIR)
-	@echo "Linking $@..."
+	@echo "Linking $@"
 	$(CXX) $(OBJECTS) -o $(TARGET) $(LDFLAGS)
 	@echo "Build complete! Run with: ./$@"
 
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.cpp | $(BUILD_DIR)
-	@echo "Compiling $<..."
+	@echo "Compiling $<"
 	@mkdir -p $(@D)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 $(BUILD_DIR):
 	@mkdir -p $(BUILD_DIR)/ProxyServer
 	@mkdir -p $(BUILD_DIR)/Session
+	@mkdir -p $(BUILD_DIR)/QueryCache
+	@mkdir -p $(BUILD_DIR)/SingleFlight
 
 $(BIN_DIR):
 	@mkdir -p $(BIN_DIR)
 
 clean:
-	@echo "Limpando arquivos de build..."
+	@echo "Limpando arquivos de build"
 	rm -rf $(BUILD_DIR) $(BIN_DIR)
 	@echo "Limpeza completa!"
 
 rebuild: clean all
 
 run: $(TARGET)
-	@echo "Running proxy server..."
+	@echo "Running proxy server"
 	./$(TARGET)
 
 .PHONY: all clean rebuild run help

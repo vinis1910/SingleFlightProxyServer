@@ -27,6 +27,8 @@ private:
     std::vector<char> client_buffer_;
     std::vector<char> server_buffer_{std::vector<char>(8192)};
     std::vector<char> startup_packet_;
+    std::string current_query_;
+    std::vector<char> cached_response_;
 
     boost::asio::io_context& io_context_;
     std::optional<tcp::socket> client_socket_;
@@ -45,6 +47,8 @@ private:
     void bridge_client_to_server();
     void bridge_server_to_client();
     bool is_sql_query(std::vector<char>& buffer, std::size_t length);
+    std::string extract_sql_query(std::vector<char>& buffer, std::size_t length);
     void close();
     void setup_server_ssl_context();
+    void cleanup_sockets();
 };
