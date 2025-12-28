@@ -8,7 +8,8 @@ using boost::asio::ip::tcp;
 
 class ProxyServer {
 public:
-    ProxyServer(boost::asio::io_context& io_context, short port, 
+    ProxyServer(boost::asio::io_context& io_context, 
+                const std::string& listen_address, short port, 
                 std::string db_host, short db_port);
 
 private:

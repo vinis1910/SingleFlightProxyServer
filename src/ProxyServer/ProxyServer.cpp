@@ -1,11 +1,13 @@
 #include "ProxyServer.hpp"
 #include "../Session/Session.hpp"
 #include <memory>
+#include <boost/asio/ip/address.hpp>
 
-ProxyServer::ProxyServer(boost::asio::io_context& io_context, short port, 
+ProxyServer::ProxyServer(boost::asio::io_context& io_context, 
+                        const std::string& listen_address, short port, 
                         std::string db_host, short db_port)
     : io_context_(io_context),
-      acceptor_(io_context, tcp::endpoint(tcp::v4(), port)),
+      acceptor_(io_context, tcp::endpoint(boost::asio::ip::address::from_string(listen_address), port)),
       db_host_(std::move(db_host)), db_port_(db_port) {
 
     do_accept();

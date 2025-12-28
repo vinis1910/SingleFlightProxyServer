@@ -1,0 +1,26 @@
+server:
+  listen_port: 6000
+  listen_address: "0.0.0.0"
+
+database:
+  host: "127.0.0.1"
+  port: 5432
+
+cache:
+  l1:
+    max_size: 1000
+    enabled: true
+  l2:
+    redis:
+      enabled: true
+      host: "127.0.0.1"
+      port: 6379
+      timeout_ms: 1000
+
+logging:
+  level: "info"
+  pattern: "[%Y-%m-%d %H:%M:%S.%e] [%^%l%$] %v"
+
+ssl:
+  enabled: true
+  verify_mode: "none"

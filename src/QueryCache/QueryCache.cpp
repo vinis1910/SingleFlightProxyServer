@@ -47,6 +47,22 @@ void QueryCache::setRedisConfig(const std::string& host, int port, int timeout_m
     connectRedis();
 }
 
+void QueryCache::setL1MaxSize(size_t max_size) {
+    std::unique_lock<std::shared_mutex> lock(l1_mutex_);
+    l1_max_size_ = max_size;
+    spdlog::info("[QueryCache] L1 max size set to {}", max_size);
+}
+
+void QueryCache::setL1Enabled(bool enabled) {
+    std::unique_lock<std::shared_mutex> lock(l1_mutex_);
+    l1_enabled_ = enabled;
+    if (!enabled) {
+        l1_list_.clear();
+        l1_map_.clear();
+    }
+    spdlog::info("[QueryCache] L1 cache {}", enabled ? "enabled" : "disabled");
+}
+
 std::string QueryCache::hash_query(const std::string& query) {
     unsigned char digest[MD5_DIGEST_LENGTH];
     MD5((unsigned char*)query.c_str(), query.length(), digest);
@@ -144,6 +160,10 @@ void QueryCache::clear() {
 }
 
 std::optional<std::string> QueryCache::getL1(const std::string& query) {
+    if (!l1_enabled_) {
+        return std::nullopt;
+    }
+    
     {
         std::shared_lock<std::shared_mutex> lock(l1_mutex_);
         auto it = l1_map_.find(query);
@@ -164,6 +184,10 @@ std::optional<std::string> QueryCache::getL1(const std::string& query) {
 }
 
 void QueryCache::putL1(const std::string& query, const std::string& result) {
+    if (!l1_enabled_) {
+        return;
+    }
+    
     std::unique_lock<std::shared_mutex> lock(l1_mutex_);
 
     auto it = l1_map_.find(query);
@@ -173,7 +197,7 @@ void QueryCache::putL1(const std::string& query, const std::string& result) {
         return;
     }
 
-    if (l1_list_.size() >= L1_MAX_SIZE) {
+    if (l1_list_.size() >= l1_max_size_) {
         auto oldest = l1_list_.begin();
         l1_map_.erase(oldest->key);
         l1_list_.pop_front();

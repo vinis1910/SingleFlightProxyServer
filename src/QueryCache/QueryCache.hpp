@@ -41,6 +41,8 @@ public:
     void clear();
 
     void setRedisConfig(const std::string& host, int port, int timeout_ms = 1000);
+    void setL1MaxSize(size_t max_size);
+    void setL1Enabled(bool enabled);
 
     struct Stats {
         size_t l1_hits = 0;
@@ -58,7 +60,8 @@ private:
     QueryCache();
     ~QueryCache();
 
-    static constexpr size_t L1_MAX_SIZE = 1000;
+    size_t l1_max_size_ = 1000;
+    bool l1_enabled_ = true;
 
     struct LRUNode {
         std::string key;
