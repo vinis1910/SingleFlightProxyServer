@@ -1,6 +1,7 @@
 server:
   listen_port: 6000
   listen_address: "0.0.0.0"
+  num_threads: 4
 
 database:
   host: "127.0.0.1"

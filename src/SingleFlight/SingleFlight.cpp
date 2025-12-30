@@ -13,6 +13,15 @@ SingleFlight::Result SingleFlight::doSingleFlight(
         auto it = flights_.find(key);
         if (it != flights_.end()) {
             flight = it->second;
+            {
+                std::lock_guard<std::mutex> flight_lock(flight->mutex);
+                if (flight->ready) {
+                    flights_.erase(it);
+                    flight = std::make_shared<Flight>();
+                    flights_[key] = flight;
+                    is_new_flight = true;
+                }
+            }
         } else {
             flight = std::make_shared<Flight>();
             flights_[key] = flight;

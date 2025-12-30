@@ -13,9 +13,10 @@ using ssl_socket = boost::asio::ssl::stream<tcp::socket>;
 
 class Session : public std::enable_shared_from_this<Session> {
 public:
-    Session(tcp::socket client_socket, boost::asio::io_context& io_context);
+    Session(tcp::socket client_socket, boost::asio::io_context& io_context, 
+            const std::string& db_host, short db_port);
     ~Session();
-    void start(const std::string& db_host, short db_port);
+    void start();
 
 private:
     boost::asio::ssl::context client_ssl_context_;
@@ -33,6 +34,8 @@ private:
     boost::asio::io_context& io_context_;
     std::optional<tcp::socket> client_socket_;
     std::optional<tcp::socket> server_socket_;
+    std::string db_host_;
+    short db_port_;
     bool ssl_enabled_;
     std::atomic<bool> is_destroying_;
     std::atomic<bool> client_closed_;
@@ -51,4 +54,8 @@ private:
     void close();
     void setup_server_ssl_context();
     void cleanup_sockets();
+    
+    ssl_socket* getServerSslSocket();
+    tcp::socket* getServerSocket();
+    bool isServerSslEnabled() const;
 };

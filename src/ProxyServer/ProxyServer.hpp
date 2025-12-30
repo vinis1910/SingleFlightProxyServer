@@ -3,6 +3,8 @@
 
 #include <boost/asio.hpp>
 #include <string>
+#include <memory>
+#include <atomic>
 
 using boost::asio::ip::tcp;
 
@@ -12,12 +14,15 @@ public:
                 const std::string& listen_address, short port, 
                 std::string db_host, short db_port);
 
+    void shutdown();
+
 private:
     void do_accept();
     boost::asio::io_context& io_context_;
     tcp::acceptor acceptor_;
     std::string db_host_;
     short db_port_;
+    std::atomic<bool> accepting_{true};
 };
 
 #endif // PROXY_SERVER_HPP

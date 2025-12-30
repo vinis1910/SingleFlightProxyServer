@@ -55,6 +55,9 @@ bool Config::parseYaml(const YAML::Node& config) {
             if (server["listen_address"]) {
                 listen_address_ = server["listen_address"].as<std::string>();
             }
+            if (server["num_threads"]) {
+                num_threads_ = server["num_threads"].as<unsigned int>();
+            }
         }
         
         if (config["database"]) {
@@ -64,6 +67,19 @@ bool Config::parseYaml(const YAML::Node& config) {
             }
             if (db["port"]) {
                 db_port_ = db["port"].as<unsigned short>();
+            }
+            
+            if (db["pool"]) {
+                const auto& pool = db["pool"];
+                if (pool["min_size"]) {
+                    pool_min_size_ = pool["min_size"].as<size_t>();
+                }
+                if (pool["max_size"]) {
+                    pool_max_size_ = pool["max_size"].as<size_t>();
+                }
+                if (pool["idle_timeout_seconds"]) {
+                    pool_idle_timeout_seconds_ = pool["idle_timeout_seconds"].as<size_t>();
+                }
             }
         }
         

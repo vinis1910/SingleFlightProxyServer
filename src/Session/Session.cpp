@@ -27,12 +27,15 @@ static bool is_expected_ssl_error(const boost::system::error_code& ec) {
     return false;
 }
 
-Session::Session(tcp::socket client_socket, boost::asio::io_context& io_context)
+Session::Session(tcp::socket client_socket, boost::asio::io_context& io_context, 
+                 const std::string& db_host, short db_port)
     : client_ssl_context_(boost::asio::ssl::context::tlsv12_client),
       server_ssl_context_(boost::asio::ssl::context::tlsv12_server),
       io_context_(io_context),
       client_socket_(std::move(client_socket)),
       server_socket_(io_context),
+      db_host_(db_host),
+      db_port_(db_port),
       ssl_enabled_(false),
       is_destroying_(false),
       client_closed_(false),
@@ -211,7 +214,7 @@ void Session::setup_server_ssl_context() {
     EVP_PKEY_free(pkey);
 }
 
-void Session::start(const std::string& db_host, short db_port) {
+void Session::start() {
     if (is_destroying_.load()) {
         return;
     }
@@ -223,22 +226,20 @@ void Session::start(const std::string& db_host, short db_port) {
         return;
     }
 
-    tcp::resolver resolver(client_socket_->get_executor());
-    auto endpoints = resolver.resolve(db_host, std::to_string(db_port));
-
-    boost::asio::async_connect(*server_socket_, endpoints,
-        [this, self](boost::system::error_code ec, tcp::endpoint) {
-            if (is_destroying_.load()) {
-                return;
-            }
-            if (!ec) {
-                spdlog::info("[Session] Connected to PostgreSQL. Waiting for SSLRequest");
-                read_client_startup();
-            } else {
-                spdlog::error("[Session] Failed to connect to PostgreSQL: {}", ec.message());
-                close();
-            }
-        });
+    tcp::resolver resolver(io_context_);
+    auto endpoints = resolver.resolve(db_host_, std::to_string(db_port_));
+    
+    boost::system::error_code ec;
+    boost::asio::connect(*server_socket_, endpoints, ec);
+    
+    if (ec) {
+        spdlog::error("[Session] Failed to connect to {}:{} - {}", db_host_, db_port_, ec.message());
+        close();
+        return;
+    }
+    
+    spdlog::debug("[Session] Connected to database server. Waiting for SSLRequest");
+    read_client_startup();
 }
 
 void Session::read_client_startup() {
@@ -301,12 +302,13 @@ void Session::read_client_startup_after_ssl() {
             }
             if (!ec) {
                 spdlog::debug("[Session] Received {} bytes from client after SSL handshake", length);
-                if (!server_ssl_socket_) {
+                auto* server_sock = getServerSslSocket();
+                if (!server_sock) {
                     spdlog::error("[Session] Server SSL socket not available");
                     return;
                 }
 
-                boost::asio::async_write(*server_ssl_socket_,
+                boost::asio::async_write(*server_sock,
                     boost::asio::buffer(client_buffer_, length),
                     [this, self](boost::system::error_code ec, std::size_t) {
                         if (is_destroying_.load()) {
@@ -342,6 +344,22 @@ void Session::check_server_ssl_support() {
     if (!server_socket_) {
         spdlog::error("[Session] Server socket not available");
         return;
+    }
+
+    if (!server_socket_->is_open()) {
+        spdlog::warn("[Session] Server socket closed, reconnecting...");
+        tcp::resolver resolver(io_context_);
+        auto endpoints = resolver.resolve(db_host_, std::to_string(db_port_));
+        
+        boost::system::error_code ec;
+        boost::asio::connect(*server_socket_, endpoints, ec);
+        
+        if (ec) {
+            spdlog::error("[Session] Failed to reconnect to {}:{} - {}", db_host_, db_port_, ec.message());
+            close();
+            return;
+        }
+        spdlog::debug("[Session] Reconnected to database server");
     }
 
     std::vector<unsigned char> ssl_request_data = {
@@ -624,13 +642,22 @@ void Session::bridge_client_to_server() {
                 return;
             }
 
-            if (ssl_enabled_ && server_ssl_socket_) {
-                boost::asio::async_write(*server_ssl_socket_, boost::asio::buffer(client_buffer_, length), write_handler);
-            } else if (server_socket_) {
-                boost::asio::async_write(*server_socket_, boost::asio::buffer(client_buffer_, length), write_handler);
+            if (isServerSslEnabled()) {
+                auto* server_sock = getServerSslSocket();
+                if (server_sock) {
+                    boost::asio::async_write(*server_sock, boost::asio::buffer(client_buffer_, length), write_handler);
+                } else {
+                    spdlog::warn("[Session] No server SSL socket available for writing");
+                    close();
+                }
             } else {
-                spdlog::warn("[Session] No server socket available for writing");
-                close();
+                auto* server_sock = getServerSocket();
+                if (server_sock) {
+                    boost::asio::async_write(*server_sock, boost::asio::buffer(client_buffer_, length), write_handler);
+                } else {
+                    spdlog::warn("[Session] No server socket available for writing");
+                    close();
+                }
             }
         } else {
             if (ec == boost::asio::error::eof) {
@@ -741,15 +768,24 @@ void Session::bridge_server_to_client() {
         return;
     }
 
-    if (ssl_enabled_ && server_ssl_socket_) {
-        spdlog::debug("[Session] Waiting for data from server (SSL)");
-        server_ssl_socket_->async_read_some(boost::asio::buffer(server_buffer_), read_handler);
-    } else if (server_socket_) {
-        spdlog::debug("[Session] Waiting for data from server (plain)");
-        server_socket_->async_read_some(boost::asio::buffer(server_buffer_), read_handler);
+    if (isServerSslEnabled()) {
+        auto* server_sock = getServerSslSocket();
+        if (server_sock) {
+            spdlog::debug("[Session] Waiting for data from server (SSL)");
+            server_sock->async_read_some(boost::asio::buffer(server_buffer_), read_handler);
+        } else {
+            spdlog::warn("[Session] No server SSL socket available for reading");
+            close();
+        }
     } else {
-        spdlog::warn("[Session] No server socket available for reading");
-        close();
+        auto* server_sock = getServerSocket();
+        if (server_sock) {
+            spdlog::debug("[Session] Waiting for data from server (plain)");
+            server_sock->async_read_some(boost::asio::buffer(server_buffer_), read_handler);
+        } else {
+            spdlog::warn("[Session] No server socket available for reading");
+            close();
+        }
     }
 }
 
@@ -777,4 +813,19 @@ std::string Session::extract_sql_query(std::vector<char>& buffer, std::size_t le
     }
     
     return std::string(buffer.begin() + query_start, buffer.begin() + query_end);
+}
+
+ssl_socket* Session::getServerSslSocket() {
+    return server_ssl_socket_.get();
+}
+
+tcp::socket* Session::getServerSocket() {
+    if (server_socket_ && server_socket_->is_open()) {
+        return &(*server_socket_);
+    }
+    return nullptr;
+}
+
+bool Session::isServerSslEnabled() const {
+    return ssl_enabled_ && server_ssl_socket_ != nullptr;
 }

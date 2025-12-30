@@ -13,9 +13,14 @@ public:
     
     unsigned short getListenPort() const { return listen_port_; }
     std::string getListenAddress() const { return listen_address_; }
+    unsigned int getNumThreads() const { return num_threads_; }
     
     std::string getDbHost() const { return db_host_; }
     unsigned short getDbPort() const { return db_port_; }
+    
+    size_t getPoolMinSize() const { return pool_min_size_; }
+    size_t getPoolMaxSize() const { return pool_max_size_; }
+    size_t getPoolIdleTimeout() const { return pool_idle_timeout_seconds_; }
     
     size_t getL1MaxSize() const { return l1_max_size_; }
     bool isL1Enabled() const { return l1_enabled_; }
@@ -44,9 +49,14 @@ private:
     
     unsigned short listen_port_ = 6000;
     std::string listen_address_ = "0.0.0.0";
+    unsigned int num_threads_ = 4;
     
     std::string db_host_ = "127.0.0.1";
     unsigned short db_port_ = 5432;
+    
+    size_t pool_min_size_ = 5;
+    size_t pool_max_size_ = 20;
+    size_t pool_idle_timeout_seconds_ = 300;
     
     size_t l1_max_size_ = 1000;
     bool l1_enabled_ = true;

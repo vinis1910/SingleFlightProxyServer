@@ -1,5 +1,6 @@
 #include "ProxyServer.hpp"
 #include "../Session/Session.hpp"
+#include <spdlog/spdlog.h>
 #include <memory>
 #include <boost/asio/ip/address.hpp>
 
@@ -13,12 +14,26 @@ ProxyServer::ProxyServer(boost::asio::io_context& io_context,
     do_accept();
 }
 
+void ProxyServer::shutdown() {
+    accepting_.store(false);
+    boost::system::error_code ec;
+    acceptor_.close(ec);
+    spdlog::info("[ProxyServer] Stopped accepting new connections");
+}
+
 void ProxyServer::do_accept() {
+    if (!accepting_.load()) {
+        return;
+    }
+    
     acceptor_.async_accept([this](boost::system::error_code ec, tcp::socket socket) {
-        if (!ec) {
-            std::make_shared<Session>(std::move(socket), io_context_)
-                ->start(db_host_, db_port_);
+        if (!ec && accepting_.load()) {
+            auto session = std::make_shared<Session>(std::move(socket), io_context_, 
+                                                     db_host_, db_port_);
+            session->start();
         }
-        do_accept();
+        if (accepting_.load()) {
+            do_accept();
+        }
     });
 }
