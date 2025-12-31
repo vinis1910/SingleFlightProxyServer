@@ -1,13 +1,13 @@
 #include "Session.hpp"
+#include "SharedSSLContext.hpp"
 #include "../QueryCache/QueryCache.hpp"
 #include <spdlog/spdlog.h>
 #include <openssl/ssl.h>
 #include <openssl/err.h>
-#include <openssl/x509.h>
-#include <openssl/pem.h>
-#include <openssl/rsa.h>
 #include <string>
 #include <cstring>
+#include <functional>
+#include <memory>
 
 static bool is_expected_ssl_error(const boost::system::error_code& ec) {
     if (ec == boost::asio::error::operation_aborted) {
@@ -29,8 +29,8 @@ static bool is_expected_ssl_error(const boost::system::error_code& ec) {
 
 Session::Session(tcp::socket client_socket, boost::asio::io_context& io_context, 
                  const std::string& db_host, short db_port)
-    : client_ssl_context_(boost::asio::ssl::context::tlsv12_client),
-      server_ssl_context_(boost::asio::ssl::context::tlsv12_server),
+    : client_ssl_context_(SharedSSLContext::getInstance().getClientContext()),
+      server_ssl_context_(SharedSSLContext::getInstance().getServerContext()),
       io_context_(io_context),
       client_socket_(std::move(client_socket)),
       server_socket_(io_context),
@@ -41,19 +41,9 @@ Session::Session(tcp::socket client_socket, boost::asio::io_context& io_context,
       client_closed_(false),
       server_closed_(false) {
 
-    client_ssl_context_.set_default_verify_paths();
-    client_ssl_context_.set_verify_mode(boost::asio::ssl::verify_none);
-    client_ssl_context_.set_options(
-        boost::asio::ssl::context::default_workarounds |
-        boost::asio::ssl::context::no_sslv2 |
-        boost::asio::ssl::context::no_sslv3 |
-        boost::asio::ssl::context::single_dh_use);
-
     client_buffer_.resize(8192);
     server_buffer_.resize(8192);
     startup_packet_.resize(8192);
-
-    setup_server_ssl_context();
 }
 
 Session::~Session() {
@@ -160,59 +150,6 @@ void Session::cleanup_sockets() {
     }
 }
 
-void Session::setup_server_ssl_context() {
-    server_ssl_context_.set_options(
-        boost::asio::ssl::context::default_workarounds |
-        boost::asio::ssl::context::no_sslv2 |
-        boost::asio::ssl::context::no_sslv3 |
-        boost::asio::ssl::context::single_dh_use);
-    server_ssl_context_.set_verify_mode(boost::asio::ssl::verify_none);
-
-    SSL_CTX* ctx = server_ssl_context_.native_handle();
-    SSL_CTX_set_cipher_list(ctx, "DEFAULT:!aNULL:!eNULL:!MD5:!3DES:!DES:!RC4:!IDEA");
-
-    EVP_PKEY* pkey = EVP_PKEY_new();
-    RSA* rsa = RSA_new();
-    BIGNUM* bn = BN_new();
-    BN_set_word(bn, RSA_F4);
-    RSA_generate_key_ex(rsa, 2048, bn, nullptr);
-    EVP_PKEY_set1_RSA(pkey, rsa);
-    RSA_free(rsa);
-    BN_free(bn);
-
-    X509* x509 = X509_new();
-    X509_set_version(x509, 2);
-    ASN1_INTEGER_set(X509_get_serialNumber(x509), 1);
-    X509_gmtime_adj(X509_get_notBefore(x509), 0);
-    X509_gmtime_adj(X509_get_notAfter(x509), 31536000L);
-    X509_set_pubkey(x509, pkey);
-
-    X509_NAME* name = X509_get_subject_name(x509);
-    X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC, (unsigned char*)"localhost", -1, -1, 0);
-    X509_set_issuer_name(x509, name);
-
-    X509_sign(x509, pkey, EVP_sha256());
-
-    int cert_result = SSL_CTX_use_certificate(ctx, x509);
-    int key_result = SSL_CTX_use_PrivateKey(ctx, pkey);
-
-    if (cert_result != 1 || key_result != 1) {
-        spdlog::error("[Session] Failed to set certificate or private key!");
-        X509_free(x509);
-        EVP_PKEY_free(pkey);
-        return;
-    }
-
-    if (!SSL_CTX_check_private_key(ctx)) {
-        spdlog::error("[Session] Private key does not match certificate!");
-        X509_free(x509);
-        EVP_PKEY_free(pkey);
-        return;
-    }
-
-    X509_free(x509);
-    EVP_PKEY_free(pkey);
-}
 
 void Session::start() {
     if (is_destroying_.load()) {
@@ -226,20 +163,21 @@ void Session::start() {
         return;
     }
 
-    tcp::resolver resolver(io_context_);
-    auto endpoints = resolver.resolve(db_host_, std::to_string(db_port_));
-    
-    boost::system::error_code ec;
-    boost::asio::connect(*server_socket_, endpoints, ec);
-    
-    if (ec) {
-        spdlog::error("[Session] Failed to connect to {}:{} - {}", db_host_, db_port_, ec.message());
-        close();
-        return;
-    }
-    
-    spdlog::debug("[Session] Connected to database server. Waiting for SSLRequest");
-    read_client_startup();
+    spdlog::debug("[Session] Connecting to database server asynchronously...");
+    connect_to_database([this, self](boost::system::error_code ec) {
+        if (is_destroying_.load()) {
+            return;
+        }
+        
+        if (ec) {
+            spdlog::error("[Session] Failed to connect to {}:{} - {}", db_host_, db_port_, ec.message());
+            close();
+            return;
+        }
+        
+        spdlog::debug("[Session] Connected to database server. Waiting for SSLRequest");
+        read_client_startup();
+    });
 }
 
 void Session::read_client_startup() {
@@ -348,18 +286,20 @@ void Session::check_server_ssl_support() {
 
     if (!server_socket_->is_open()) {
         spdlog::warn("[Session] Server socket closed, reconnecting...");
-        tcp::resolver resolver(io_context_);
-        auto endpoints = resolver.resolve(db_host_, std::to_string(db_port_));
-        
-        boost::system::error_code ec;
-        boost::asio::connect(*server_socket_, endpoints, ec);
-        
-        if (ec) {
-            spdlog::error("[Session] Failed to reconnect to {}:{} - {}", db_host_, db_port_, ec.message());
-            close();
-            return;
-        }
-        spdlog::debug("[Session] Reconnected to database server");
+        connect_to_database([this, self](boost::system::error_code ec) {
+            if (is_destroying_.load()) {
+                return;
+            }
+            
+            if (ec) {
+                spdlog::error("[Session] Failed to reconnect to {}:{} - {}", db_host_, db_port_, ec.message());
+                close();
+                return;
+            }
+            spdlog::debug("[Session] Reconnected to database server");
+            check_server_ssl_support();
+        });
+        return;
     }
 
     std::vector<unsigned char> ssl_request_data = {
@@ -483,10 +423,12 @@ void Session::perform_ssl_handshake() {
                         return;
                     }
                     if (ec) {
-                        if (!is_expected_ssl_error(ec)) {
+                        if (is_expected_ssl_error(ec)) {
+                            spdlog::debug("[Session] Client closed connection during SSL handshake: {}", ec.message());
+                        } else {
                             spdlog::error("[Session] Client handshake failed: {}", ec.message());
-                            close();
                         }
+                        close();
                         return;
                     }
 
@@ -513,6 +455,36 @@ void Session::perform_ssl_handshake() {
                                 }
                             }
                         });
+                });
+        });
+}
+
+void Session::connect_to_database(std::function<void(boost::system::error_code)> callback) {
+    if (is_destroying_.load()) {
+        return;
+    }
+
+    auto self = shared_from_this();
+
+    auto resolver = std::make_shared<tcp::resolver>(io_context_);
+    resolver->async_resolve(db_host_, std::to_string(db_port_),
+        [this, self, resolver, callback](boost::system::error_code ec, tcp::resolver::results_type endpoints) {
+            if (is_destroying_.load()) {
+                return;
+            }
+            
+            if (ec) {
+                spdlog::error("[Session] Failed to resolve {}:{} - {}", db_host_, db_port_, ec.message());
+                callback(ec);
+                return;
+            }
+
+            boost::asio::async_connect(*server_socket_, endpoints,
+                [this, self, callback](boost::system::error_code ec, tcp::endpoint) {
+                    if (is_destroying_.load()) {
+                        return;
+                    }
+                    callback(ec);
                 });
         });
 }
@@ -789,21 +761,22 @@ void Session::bridge_server_to_client() {
     }
 }
 
-bool Session::is_sql_query(std::vector<char>& buffer, std::size_t length) {
+bool Session::is_sql_query(const std::vector<char>& buffer, std::size_t length) const {
     return length > 0 && static_cast<unsigned char>(buffer[0]) == 'Q';
 }
 
-std::string Session::extract_sql_query(std::vector<char>& buffer, std::size_t length) {
+std::string Session::extract_sql_query(const std::vector<char>& buffer, std::size_t length) const {
     if (length < 5) {
         return "";
     }
     
-    size_t query_start = 5;
-    size_t query_end = length;
+    const char* data = buffer.data();
+    const char* query_start = data + 5;
+    const char* query_end = data + length;
     
-    for (size_t i = query_start; i < length; i++) {
-        if (buffer[i] == '\0') {
-            query_end = i;
+    for (const char* p = query_start; p < query_end; ++p) {
+        if (*p == '\0') {
+            query_end = p;
             break;
         }
     }
@@ -812,7 +785,7 @@ std::string Session::extract_sql_query(std::vector<char>& buffer, std::size_t le
         return "";
     }
     
-    return std::string(buffer.begin() + query_start, buffer.begin() + query_end);
+    return std::string(query_start, query_end);
 }
 
 ssl_socket* Session::getServerSslSocket() {

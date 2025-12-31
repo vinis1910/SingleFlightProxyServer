@@ -9,6 +9,7 @@ BIN_DIR = bin
 SOURCES = $(SRC_DIR)/main.cpp \
           $(SRC_DIR)/ProxyServer/ProxyServer.cpp \
           $(SRC_DIR)/Session/Session.cpp \
+          $(SRC_DIR)/Session/SharedSSLContext.cpp \
           $(SRC_DIR)/QueryCache/QueryCache.cpp \
           $(SRC_DIR)/SingleFlight/SingleFlight.cpp \
           $(SRC_DIR)/Config/Config.cpp

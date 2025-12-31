@@ -1,5 +1,6 @@
 #include "SingleFlight.hpp"
 #include <spdlog/spdlog.h>
+#include <thread>
 
 SingleFlight::Result SingleFlight::doSingleFlight(
     const std::string& key,
@@ -68,8 +69,13 @@ void SingleFlight::notifyResult(const std::string& key, const std::string& resul
         num_waiters = flight->waiters;
     }
     
+
     for (auto& callback : callbacks_to_notify) {
-        callback(result);
+        try {
+            callback(result);
+        } catch (const std::exception& e) {
+            spdlog::error("[SingleFlight] Callback error: {}", e.what());
+        }
     }
     
     spdlog::info("[SingleFlight] Notified {} waiters for key: {}", num_waiters, key);

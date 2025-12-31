@@ -7,6 +7,7 @@
 #include <iostream>
 #include <optional>
 #include <atomic>
+#include "SharedSSLContext.hpp"
 
 using boost::asio::ip::tcp;
 using ssl_socket = boost::asio::ssl::stream<tcp::socket>;
@@ -19,8 +20,8 @@ public:
     void start();
 
 private:
-    boost::asio::ssl::context client_ssl_context_;
-    boost::asio::ssl::context server_ssl_context_;
+    boost::asio::ssl::context& client_ssl_context_;
+    boost::asio::ssl::context& server_ssl_context_;
 
     std::unique_ptr<ssl_socket> client_ssl_socket_;
     std::unique_ptr<ssl_socket> server_ssl_socket_;
@@ -46,13 +47,13 @@ private:
     void handle_ssl_request();
     void check_server_ssl_support();
     void perform_ssl_handshake();
+    void connect_to_database(std::function<void(boost::system::error_code)> callback);
     void relay_to_server(std::size_t length);
     void bridge_client_to_server();
     void bridge_server_to_client();
-    bool is_sql_query(std::vector<char>& buffer, std::size_t length);
-    std::string extract_sql_query(std::vector<char>& buffer, std::size_t length);
+    bool is_sql_query(const std::vector<char>& buffer, std::size_t length) const;
+    std::string extract_sql_query(const std::vector<char>& buffer, std::size_t length) const;
     void close();
-    void setup_server_ssl_context();
     void cleanup_sockets();
     
     ssl_socket* getServerSslSocket();
